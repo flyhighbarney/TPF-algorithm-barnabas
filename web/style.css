@@ -265,6 +265,105 @@ pre.ascii {
   color: var(--accent-2);
 }
 
+/* ── Animate tab ────────────────────────────────────────────────────────── */
+
+.ani-stage-card h2 {
+  font-size: 1.1rem;
+  color: var(--accent);
+}
+.ani-stage-card h2 em {
+  font-style: normal;
+  color: var(--accent-2);
+  font-weight: 500;
+}
+.ani-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.8rem;
+  margin-bottom: 0.8rem;
+  min-height: 280px;
+}
+.ani-canvas {
+  max-width: 100%;
+  max-height: 420px;
+  image-rendering: pixelated;
+  border-radius: 3px;
+  background: #000;
+}
+.ani-canvas.flash {
+  animation: flash 0.45s cubic-bezier(.2,.7,.3,1);
+}
+@keyframes flash {
+  0%   { filter: brightness(2.2) saturate(1.6); transform: scale(1.02); }
+  60%  { filter: brightness(1.1) saturate(1.1); transform: scale(1); }
+  100% { filter: brightness(1)   saturate(1);   transform: scale(1); }
+}
+
+.stage-desc {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.4rem 0 0.8rem;
+  min-height: 2.6em;
+  line-height: 1.45;
+}
+
+.dir-toggle button {
+  flex: 1;
+  text-align: center;
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  margin: 0.2rem 0 0.6rem;
+}
+
+.ani-filmstrip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0.5rem 0.2rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.6rem;
+}
+.ani-filmstrip:empty { display: none; }
+.ani-filmstrip .frame {
+  position: relative;
+  flex: 0 0 auto;
+  width: 72px;
+  cursor: pointer;
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #000;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.ani-filmstrip .frame:hover { transform: translateY(-2px); }
+.ani-filmstrip .frame.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(124,196,255,0.25);
+}
+.ani-filmstrip .frame canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+}
+.ani-filmstrip .frame .frame-label {
+  position: absolute;
+  inset: auto 0 0 0;
+  background: rgba(0,0,0,0.75);
+  color: #fff;
+  font-size: 0.65rem;
+  padding: 2px 4px;
+  text-align: center;
+  font-family: var(--mono);
+}
+
 footer {
   text-align: center;
   padding: 1.5rem;

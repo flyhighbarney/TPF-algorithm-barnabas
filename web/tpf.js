@@ -390,6 +390,133 @@ export async function decryptAuthenticated(rgbBytes, h, w, key, imghash, tag, pr
   return joinChannels(r, g, b, n);
 }
 
+// ── Animated variants: yield intermediate RGB snapshots per stage ────────────
+
+export async function encryptAnimated(rgbBytes, h, w, key, onStage) {
+  if (key.length !== 16) throw new Error("key must be 16 bytes (128 bits)");
+  const { K, imghash } = await expandKey(key, rgbBytes);
+  const n = h * w;
+  let [R, G, B] = splitChannels(rgbBytes, n);
+
+  await onStage({
+    label: "Plaintext",
+    desc: "Original image, decomposed into independent R, G, B channels.",
+    rgb: joinChannels(R, G, B, n),
+  });
+
+  for (let round = 1; round <= 2; round++) {
+    const suf = round === 1 ? "" : "2";
+
+    R = permute2d(R, h, w, K[`r${round}_row`], K[`r${round}_col`]);
+    G = permute2d(G, h, w, K[`g${round}_row`], K[`g${round}_col`]);
+    B = permute2d(B, h, w, K[`b${round}_row`], K[`b${round}_col`]);
+    await onStage({
+      label: `Round ${round} · 2D permutation`,
+      desc: "Fisher–Yates shuffles rows, then columns, then within each row — destroys spatial correlation without changing pixel values.",
+      rgb: joinChannels(R, G, B, n),
+    });
+
+    R = applySbox(R, genSbox(K[`r_sb${round}`]));
+    G = applySbox(G, genSbox(K[`g_sb${round}`]));
+    B = applySbox(B, genSbox(K[`b_sb${round}`]));
+    await onStage({
+      label: `Round ${round} · S-box`,
+      desc: "Key-dependent 8-bit non-linear substitution: every pixel byte is replaced by sbox[byte]. Adds confusion.",
+      rgb: joinChannels(R, G, B, n),
+    });
+
+    const Rd = R.slice(), Gd = G.slice(), Bd = B.slice();
+    diffuse2d(Rd, h, w, K[`r_dr${suf}`], K[`r_dc${suf}`], K[`r_df${suf}`]);
+    diffuse2d(Gd, h, w, K[`g_dr${suf}`], K[`g_dc${suf}`], K[`g_df${suf}`]);
+    diffuse2d(Bd, h, w, K[`b_dr${suf}`], K[`b_dc${suf}`], K[`b_df${suf}`]);
+    R = Rd; G = Gd; B = Bd;
+    await onStage({
+      label: `Round ${round} · prefix-XOR diffusion`,
+      desc: "Row, column, and full-image prefix-XOR with a keystream. After this stage, every output byte depends on every preceding byte and on the key.",
+      rgb: joinChannels(R, G, B, n),
+    });
+  }
+
+  const [Rf, Gf, Bf] = entangle(R, G, B, K.mode);
+  const enc = joinChannels(Rf, Gf, Bf, n);
+  await onStage({
+    label: "Cross-channel entanglement",
+    desc: "R, G, B are XOR-mixed at key-derived rotated offsets — flipping a bit in one channel propagates to all three.",
+    rgb: enc,
+  });
+
+  const tag = await hmacSha256(K.hmac_key, enc);
+  await onStage({
+    label: "Authenticated ciphertext",
+    desc: "HMAC-SHA-256 tag computed over the ciphertext. The image hash + tag travel alongside the ciphertext for integrity.",
+    rgb: enc,
+    final: true,
+  });
+
+  return { enc, imghash, tag };
+}
+
+export async function decryptAnimated(rgbBytes, h, w, key, imghash, tag, onStage) {
+  if (key.length !== 16) throw new Error("key must be 16 bytes (128 bits)");
+  const K = await expandKeyFromHash(key, imghash);
+
+  const expected = await hmacSha256(K.hmac_key, rgbBytes);
+  if (!constTimeEq(expected, tag)) {
+    throw new Error("HMAC verification failed — ciphertext tampered, or wrong key/hash");
+  }
+
+  const n = h * w;
+  await onStage({
+    label: "Ciphertext (HMAC verified)",
+    desc: "HMAC tag matches — the ciphertext is intact and we can safely invert the pipeline.",
+    rgb: rgbBytes.slice(),
+  });
+
+  const [Rf, Gf, Bf] = splitChannels(rgbBytes, n);
+  let [R, G, B] = disentangle(Rf, Gf, Bf, K.mode);
+  await onStage({
+    label: "Disentanglement",
+    desc: "Undo the cross-channel XOR mixing, recovering the pre-entanglement R, G, B.",
+    rgb: joinChannels(R, G, B, n),
+  });
+
+  for (let round = 2; round >= 1; round--) {
+    const suf = round === 1 ? "" : "2";
+
+    const Rd = R.slice(), Gd = G.slice(), Bd = B.slice();
+    invDiffuse2d(Rd, h, w, K[`r_dr${suf}`], K[`r_dc${suf}`], K[`r_df${suf}`]);
+    invDiffuse2d(Gd, h, w, K[`g_dr${suf}`], K[`g_dc${suf}`], K[`g_df${suf}`]);
+    invDiffuse2d(Bd, h, w, K[`b_dr${suf}`], K[`b_dc${suf}`], K[`b_df${suf}`]);
+    R = Rd; G = Gd; B = Bd;
+    await onStage({
+      label: `Round ${round}⁻¹ · diffusion`,
+      desc: "Reverse the row + column + full-image prefix-XOR and strip the keystream.",
+      rgb: joinChannels(R, G, B, n),
+    });
+
+    R = applySbox(R, invSbox(genSbox(K[`r_sb${round}`])));
+    G = applySbox(G, invSbox(genSbox(K[`g_sb${round}`])));
+    B = applySbox(B, invSbox(genSbox(K[`b_sb${round}`])));
+    await onStage({
+      label: `Round ${round}⁻¹ · S-box`,
+      desc: "Apply the inverse S-box — substitution undone.",
+      rgb: joinChannels(R, G, B, n),
+    });
+
+    R = invPermute2d(R, h, w, K[`r${round}_row`], K[`r${round}_col`]);
+    G = invPermute2d(G, h, w, K[`g${round}_row`], K[`g${round}_col`]);
+    B = invPermute2d(B, h, w, K[`b${round}_row`], K[`b${round}_col`]);
+    await onStage({
+      label: `Round ${round}⁻¹ · permutation`,
+      desc: "Reverse the row + column + intra-row shuffles. Pixels return to their original positions.",
+      rgb: joinChannels(R, G, B, n),
+      final: round === 1,
+    });
+  }
+
+  return joinChannels(R, G, B, n);
+}
+
 // ── Hex helpers ──────────────────────────────────────────────────────────────
 
 export function bytesToHex(bytes) {

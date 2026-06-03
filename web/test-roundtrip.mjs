@@ -4,6 +4,8 @@
 import {
   encryptAuthenticated,
   decryptAuthenticated,
+  encryptAnimated,
+  decryptAnimated,
   bytesToHex,
   hexToBytes,
   randomKeyHex,
@@ -83,6 +85,29 @@ async function runWrongKey() {
   }
 }
 
+async function runAnimatedConsistency() {
+  const w = 24, h = 24;
+  const rgb = makeImage(w, h, 11);
+  const key = hexToBytes(randomKeyHex());
+  const a = await encryptAuthenticated(rgb, h, w, key);
+
+  const stagesEnc = [];
+  const b = await encryptAnimated(rgb, h, w, key, async (s) => { stagesEnc.push(s); });
+  const okEnc = bytesEq(a.enc, b.enc) === -1
+             && bytesEq(a.imghash, b.imghash) === -1
+             && bytesEq(a.tag, b.tag) === -1
+             && bytesEq(stagesEnc[stagesEnc.length - 1].rgb, b.enc) === -1;
+
+  const stagesDec = [];
+  const d = await decryptAnimated(a.enc, h, w, key, a.imghash, a.tag, async (s) => { stagesDec.push(s); });
+  const okDec = bytesEq(d, rgb) === -1
+             && bytesEq(stagesDec[stagesDec.length - 1].rgb, rgb) === -1;
+
+  const ok = okEnc && okDec;
+  console.log(`[animated  ] ${ok ? "✓" : "✗"} ${stagesEnc.length} enc stages, ${stagesDec.length} dec stages, end-state matches non-animated`);
+  return ok;
+}
+
 const results = [];
 results.push(await runCase(8,   8,   "tiny"));
 results.push(await runCase(16,  16,  "small"));
@@ -90,6 +115,7 @@ results.push(await runCase(32,  32,  "medium"));
 results.push(await runCase(64,  64,  "large"));
 results.push(await runTamper());
 results.push(await runWrongKey());
+results.push(await runAnimatedConsistency());
 
 const passed = results.filter(Boolean).length;
 console.log(`\n${passed}/${results.length} tests passed`);

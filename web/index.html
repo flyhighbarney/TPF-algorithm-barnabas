@@ -24,6 +24,7 @@
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="encrypt" role="tab">Encrypt</button>
     <button class="tab" data-tab="decrypt" role="tab">Decrypt</button>
+    <button class="tab" data-tab="animate" role="tab">Animate</button>
     <button class="tab" data-tab="about" role="tab">How it works</button>
   </nav>
 
@@ -110,6 +111,54 @@
           <h2>3. Plaintext</h2>
           <canvas id="dec-out" class="preview" hidden></canvas>
           <button id="dec-dl-png" class="primary" hidden>Download decrypted .png</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ANIMATE -->
+    <section id="animate" class="panel">
+      <div class="grid">
+        <div class="card">
+          <h2>1. Image</h2>
+          <div class="row">
+            <button id="ani-demo" class="primary">Use demo pattern</button>
+            <button id="ani-upload-btn" class="ghost">Upload your own…</button>
+            <input type="file" id="ani-file" accept="image/*" hidden />
+          </div>
+          <canvas id="ani-input" class="preview" hidden></canvas>
+          <div class="meta" id="ani-meta">No image loaded.</div>
+
+          <label for="ani-key">128-bit key (32 hex chars)</label>
+          <div class="row">
+            <input id="ani-key" type="text" maxlength="32" spellcheck="false"
+                   placeholder="generate or enter" />
+            <button id="ani-key-rand" class="ghost" title="Generate random key">⟳</button>
+          </div>
+
+          <label>Direction</label>
+          <div class="row dir-toggle">
+            <button id="ani-dir-enc" class="primary" data-dir="enc">Encrypt →</button>
+            <button id="ani-dir-dec" class="ghost"   data-dir="dec">← Decrypt</button>
+          </div>
+
+          <label for="ani-speed">Speed: <span id="ani-speed-label">1.0s / step</span></label>
+          <input id="ani-speed" type="range" min="250" max="3000" value="1000" step="50" />
+
+          <div class="row">
+            <button id="ani-play"  class="primary" disabled>▶ Play</button>
+            <button id="ani-step"  class="ghost"   disabled>Step ▶</button>
+            <button id="ani-reset" class="ghost"   disabled>⟲ Reset</button>
+          </div>
+          <div class="status" id="ani-status"></div>
+        </div>
+
+        <div class="card wide ani-stage-card">
+          <h2 id="ani-stage-label">Pick an image and press <em>Play</em></h2>
+          <div class="ani-canvas-wrap">
+            <canvas id="ani-canvas" class="ani-canvas"></canvas>
+          </div>
+          <p id="ani-stage-desc" class="stage-desc"></p>
+          <div class="ani-filmstrip" id="ani-strip"></div>
         </div>
       </div>
     </section>

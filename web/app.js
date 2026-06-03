@@ -3,6 +3,8 @@
 import {
   encryptAuthenticated,
   decryptAuthenticated,
+  encryptAnimated,
+  decryptAnimated,
   bytesToHex,
   hexToBytes,
   randomKeyHex,
@@ -314,6 +316,334 @@ decRun.addEventListener("click", async () => {
 decDl.addEventListener("click", async () => {
   const blob = await canvasToBlob(decOut, "image/png");
   downloadBlob(blob, "tpf-decrypted.png");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANIMATE tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ANI_MAX_DIM = 256;  // downscale uploads so animation stays interactive
+
+const aniState = {
+  input: null,           // { rgb, w, h }
+  direction: "enc",      // "enc" | "dec"
+  stages: [],            // [{label, desc, rgb, final?}, ...]
+  current: 0,
+  playing: false,
+  speedMs: 1000,
+  encResult: null,       // cached encrypt output for decrypt animation
+  keyForResult: null,    // hex key that produced encResult
+};
+
+const aniEls = {
+  input: $("ani-input"), meta: $("ani-meta"), key: $("ani-key"),
+  play: $("ani-play"), step: $("ani-step"), reset: $("ani-reset"),
+  canvas: $("ani-canvas"), label: $("ani-stage-label"), desc: $("ani-stage-desc"),
+  status: $("ani-status"), strip: $("ani-strip"),
+  speed: $("ani-speed"), speedLabel: $("ani-speed-label"),
+  dirEnc: $("ani-dir-enc"), dirDec: $("ani-dir-dec"),
+};
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function hsvToRgb(h, s, v) {
+  const i = Math.floor(h * 6), f = h * 6 - i;
+  const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+  let r, g, b;
+  switch (i % 6) {
+    case 0: r=v; g=t; b=p; break;
+    case 1: r=q; g=v; b=p; break;
+    case 2: r=p; g=v; b=t; break;
+    case 3: r=p; g=q; b=v; break;
+    case 4: r=t; g=p; b=v; break;
+    default: r=v; g=p; b=q;
+  }
+  return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+}
+
+function generateDemoImage(w = 224, h = 224) {
+  // HSV wheel + radial stripes + "TPF" overlay — visually distinctive so the
+  // scrambling stages stand out.
+  const cx = w / 2, cy = h / 2;
+  const tmp = document.createElement("canvas");
+  tmp.width = w; tmp.height = h;
+  const ctx = tmp.getContext("2d", { colorSpace: "srgb" });
+  const id = ctx.createImageData(w, h, { colorSpace: "srgb" });
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dx = x - cx, dy = y - cy;
+      const angle = Math.atan2(dy, dx);
+      const rad = Math.sqrt(dx*dx + dy*dy) / Math.min(cx, cy);
+      const hue = (angle / Math.PI + 1) / 2;
+      const sat = Math.min(1, rad);
+      const stripe = 0.85 + 0.15 * Math.sin(rad * 18);
+      const [r, g, b] = hsvToRgb(hue, sat, stripe);
+      const i = (y * w + x) * 4;
+      id.data[i] = r; id.data[i+1] = g; id.data[i+2] = b; id.data[i+3] = 255;
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+  ctx.font = "bold 88px ui-sans-serif, system-ui, sans-serif";
+  ctx.fillStyle = "#fff";
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.lineWidth = 5;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.strokeText("TPF", cx, cy);
+  ctx.fillText("TPF", cx, cy);
+  const out = ctx.getImageData(0, 0, w, h, { colorSpace: "srgb" });
+  const rgb = new Uint8Array(w * h * 3);
+  for (let i = 0; i < w*h; i++) {
+    rgb[i*3] = out.data[i*4]; rgb[i*3+1] = out.data[i*4+1]; rgb[i*3+2] = out.data[i*4+2];
+  }
+  return { rgb, w, h };
+}
+
+aniEls.dirEnc.addEventListener("click", () => setDirection("enc"));
+aniEls.dirDec.addEventListener("click", () => setDirection("dec"));
+function setDirection(d) {
+  aniState.direction = d;
+  aniEls.dirEnc.classList.toggle("primary", d === "enc");
+  aniEls.dirEnc.classList.toggle("ghost",   d !== "enc");
+  aniEls.dirDec.classList.toggle("primary", d === "dec");
+  aniEls.dirDec.classList.toggle("ghost",   d !== "dec");
+  resetStages();
+}
+
+aniEls.speed.addEventListener("input", () => {
+  aniState.speedMs = +aniEls.speed.value;
+  aniEls.speedLabel.textContent = `${(aniState.speedMs / 1000).toFixed(1)}s / step`;
+});
+
+$("ani-demo").addEventListener("click", () => {
+  const { rgb, w, h } = generateDemoImage();
+  setAniInput(rgb, w, h, `synthetic demo pattern — ${w}×${h}`);
+});
+
+$("ani-upload-btn").addEventListener("click", () => $("ani-file").click());
+$("ani-file").addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  try {
+    setAniStatus("loading image…", "busy");
+    const bitmap = await loadImageFile(f);
+    let { width: w, height: h } = bitmap;
+    const longest = Math.max(w, h);
+    if (longest > ANI_MAX_DIM) {
+      const s = ANI_MAX_DIM / longest;
+      w = Math.max(8, Math.floor(w * s));
+      h = Math.max(8, Math.floor(h * s));
+    }
+    const tmp = document.createElement("canvas");
+    tmp.width = w; tmp.height = h;
+    const ctx = tmp.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const id = ctx.getImageData(0, 0, w, h, { colorSpace: "srgb" });
+    const rgb = new Uint8Array(w * h * 3);
+    for (let i = 0; i < w * h; i++) {
+      rgb[i*3]   = id.data[i*4];
+      rgb[i*3+1] = id.data[i*4+1];
+      rgb[i*3+2] = id.data[i*4+2];
+    }
+    setAniInput(rgb, w, h, `${f.name} — scaled to ${w}×${h} for animation`);
+    setAniStatus("", "");
+  } catch (err) {
+    setAniStatus("could not load image: " + err.message, "err");
+  }
+});
+
+function setAniInput(rgb, w, h, metaText) {
+  aniState.input = { rgb, w, h };
+  aniState.encResult = null;
+  aniState.keyForResult = null;
+  rgbToCanvas(rgb, w, h, aniEls.input);
+  aniEls.input.hidden = false;
+  aniEls.meta.textContent = metaText;
+  rgbToCanvas(rgb, w, h, aniEls.canvas);
+  aniEls.label.textContent = "Press Play to begin";
+  aniEls.desc.textContent = "";
+  resetStages();
+  refreshAniButtons();
+}
+
+$("ani-key-rand").addEventListener("click", () => {
+  aniEls.key.value = randomKeyHex();
+  resetStages();
+  refreshAniButtons();
+});
+aniEls.key.addEventListener("input", () => {
+  resetStages();
+  refreshAniButtons();
+});
+
+function refreshAniButtons() {
+  const keyOk = /^[0-9a-fA-F]{32}$/.test(aniEls.key.value.trim());
+  const ready = !!aniState.input && keyOk;
+  aniEls.play.disabled  = !ready;
+  aniEls.step.disabled  = !ready;
+  aniEls.reset.disabled = !ready;
+}
+
+function setAniStatus(msg, kind = "") {
+  aniEls.status.className = "status" + (kind ? " " + kind : "");
+  aniEls.status.textContent = msg;
+}
+
+function resetStages() {
+  aniState.stages = [];
+  aniState.current = 0;
+  aniState.playing = false;
+  aniEls.play.textContent = "▶ Play";
+  aniEls.strip.innerHTML = "";
+  if (aniState.input) {
+    rgbToCanvas(aniState.input.rgb, aniState.input.w, aniState.input.h, aniEls.canvas);
+    aniEls.label.textContent = "Press Play to begin";
+    aniEls.desc.textContent = "";
+  }
+}
+
+aniEls.reset.addEventListener("click", resetStages);
+
+async function ensureStages() {
+  if (aniState.stages.length > 0) return;
+
+  const key = hexToBytes(aniEls.key.value);
+  const keyHex = aniEls.key.value.toLowerCase();
+  const { rgb, w, h } = aniState.input;
+
+  if (aniState.direction === "enc") {
+    setAniStatus("computing encrypt stages…", "busy");
+    await sleep(0);
+    aniState.encResult = await encryptAnimated(rgb, h, w, key, async (s) => {
+      aniState.stages.push(s);
+    });
+    aniState.keyForResult = keyHex;
+  } else {
+    if (!aniState.encResult || aniState.keyForResult !== keyHex) {
+      setAniStatus("encrypting first to produce ciphertext…", "busy");
+      await sleep(0);
+      aniState.encResult = await encryptAuthenticated(rgb, h, w, key);
+      aniState.keyForResult = keyHex;
+    }
+    setAniStatus("computing decrypt stages…", "busy");
+    await sleep(0);
+    const { enc, imghash, tag } = aniState.encResult;
+    await decryptAnimated(enc, h, w, key, imghash, tag, async (s) => {
+      aniState.stages.push(s);
+    });
+  }
+
+  buildFilmstrip();
+  setAniStatus(`${aniState.stages.length} stages ready`, "ok");
+}
+
+function buildFilmstrip() {
+  const strip = aniEls.strip;
+  strip.innerHTML = "";
+  const { w, h } = aniState.input;
+  aniState.stages.forEach((s, idx) => {
+    const div = document.createElement("div");
+    div.className = "frame";
+    const c = document.createElement("canvas");
+    const thumbW = 72;
+    c.width = thumbW;
+    c.height = Math.max(1, Math.round(h * thumbW / w));
+    const big = document.createElement("canvas");
+    big.width = w; big.height = h;
+    rgbToCanvas(s.rgb, w, h, big);
+    const ctx = c.getContext("2d", { colorSpace: "srgb" });
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(big, 0, 0, c.width, c.height);
+    div.appendChild(c);
+    const lbl = document.createElement("div");
+    lbl.className = "frame-label";
+    lbl.textContent = String(idx + 1);
+    div.appendChild(lbl);
+    div.title = s.label;
+    div.addEventListener("click", () => {
+      aniState.playing = false;
+      aniEls.play.textContent = "▶ Play";
+      aniState.current = idx;
+      showStage(idx);
+    });
+    strip.appendChild(div);
+  });
+}
+
+function showStage(i) {
+  const s = aniState.stages[i];
+  if (!s) return;
+  const { w, h } = aniState.input;
+  aniEls.label.innerHTML = `${i + 1} / ${aniState.stages.length} · <em>${s.label}</em>`;
+  aniEls.desc.textContent = s.desc;
+  rgbToCanvas(s.rgb, w, h, aniEls.canvas);
+  aniEls.canvas.classList.remove("flash");
+  // force reflow so animation restarts
+  void aniEls.canvas.offsetWidth;
+  aniEls.canvas.classList.add("flash");
+  document.querySelectorAll("#ani-strip .frame").forEach((f, j) => {
+    f.classList.toggle("current", j === i);
+  });
+  // Auto-scroll filmstrip to keep current frame in view
+  const cur = aniEls.strip.children[i];
+  if (cur) cur.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+}
+
+aniEls.play.addEventListener("click", async () => {
+  if (aniState.playing) {
+    aniState.playing = false;
+    aniEls.play.textContent = "▶ Play";
+    return;
+  }
+  try {
+    aniEls.play.disabled = true;
+    await ensureStages();
+  } catch (e) {
+    setAniStatus("error: " + e.message, "err");
+    aniEls.play.disabled = false;
+    return;
+  }
+  aniEls.play.disabled = false;
+  if (aniState.stages.length === 0) return;
+
+  // Start from current; if at the end, restart from 0
+  if (aniState.current >= aniState.stages.length - 1) aniState.current = 0;
+  showStage(aniState.current);
+
+  aniState.playing = true;
+  aniEls.play.textContent = "❚❚ Pause";
+  while (aniState.playing && aniState.current < aniState.stages.length - 1) {
+    await sleep(aniState.speedMs);
+    if (!aniState.playing) break;
+    aniState.current++;
+    showStage(aniState.current);
+  }
+  aniState.playing = false;
+  aniEls.play.textContent = "▶ Play";
+});
+
+aniEls.step.addEventListener("click", async () => {
+  try {
+    await ensureStages();
+  } catch (e) {
+    setAniStatus("error: " + e.message, "err");
+    return;
+  }
+  if (aniState.current < aniState.stages.length - 1) {
+    aniState.current++;
+  } else {
+    aniState.current = 0;
+  }
+  showStage(aniState.current);
+});
+
+// Auto-load demo image so the tab is useful immediately on first visit.
+window.addEventListener("DOMContentLoaded", () => {
+  const { rgb, w, h } = generateDemoImage();
+  setAniInput(rgb, w, h, `synthetic demo pattern — ${w}×${h} (click Upload to use your own)`);
+  aniEls.key.value = randomKeyHex();
+  refreshAniButtons();
 });
 
 // ── repo link: leave generic, user customises after fork ─────────────────────
