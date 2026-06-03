@@ -31,6 +31,20 @@
 
 ---
 
+## Live web demo
+
+A pure-client-side JavaScript port of the cipher ships in [`web/`](web/) and
+is auto-deployed to GitHub Pages by [`.github/workflows/pages.yml`](.github/workflows/pages.yml).
+
+Once you've enabled Pages (Settings → Pages → "GitHub Actions" as source), the
+demo lives at `https://<your-username>.github.io/<repo-name>/`. It runs
+entirely in the browser — no image ever leaves your machine.
+
+The web port is functionally faithful but ~30–50× slower than the C core;
+keep images ≤ 512×512 for a snappy experience.
+
+---
+
 ## Quickstart
 
 ```bash
@@ -201,6 +215,8 @@ evaluation — not a new primitive.
 ├── tests/           # NPCR/UACI/entropy/correlation/key-sensitivity suite
 ├── docs/            # specification + prior-art + viability analyses
 ├── examples/        # runnable encrypt/decrypt demo
+├── web/             # pure-JS port + browser UI (GitHub Pages)
+├── .github/         # Pages deploy workflow
 ├── assets/          # demo images
 ├── Makefile         # `make build` -> tpf_core.so
 ├── requirements.txt

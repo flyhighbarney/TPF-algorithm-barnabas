@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TPF Cipher — Web Demo</title>
+  <meta name="description" content="In-browser demo of the TPF image cipher. Educational project, not for real-world use." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>TPF Cipher <span class="tag">web demo</span></h1>
+    <p class="tagline">
+      Treap-style permutation + parallel-prefix XOR diffusion, ported from
+      Python/C to pure JavaScript. Runs entirely in your browser — no upload,
+      no server.
+    </p>
+    <div class="warn">
+      <strong>Educational project.</strong> Not vetted for production. For real
+      data, use AES-GCM or ChaCha20-Poly1305 from a vetted library.
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="encrypt" role="tab">Encrypt</button>
+    <button class="tab" data-tab="decrypt" role="tab">Decrypt</button>
+    <button class="tab" data-tab="about" role="tab">How it works</button>
+  </nav>
+
+  <main>
+    <!-- ENCRYPT -->
+    <section id="encrypt" class="panel active">
+      <div class="grid">
+        <div class="card">
+          <h2>1. Image</h2>
+          <label class="drop" id="enc-drop">
+            <input type="file" id="enc-file" accept="image/*" hidden />
+            <span>Drop an image here, or <u>click to browse</u></span>
+            <small>PNG / JPG / WebP — kept entirely in your browser</small>
+          </label>
+          <canvas id="enc-preview" class="preview" hidden></canvas>
+          <div class="meta" id="enc-meta"></div>
+        </div>
+
+        <div class="card">
+          <h2>2. Key</h2>
+          <label for="enc-key">128-bit key (32 hex chars)</label>
+          <div class="row">
+            <input id="enc-key" type="text" maxlength="32" spellcheck="false"
+                   placeholder="e.g. 0123456789abcdef0123456789abcdef" />
+            <button id="enc-key-rand" class="ghost" title="Generate random key">⟳</button>
+          </div>
+          <button id="enc-run" class="primary" disabled>Encrypt</button>
+          <div class="status" id="enc-status"></div>
+        </div>
+
+        <div class="card">
+          <h2>3. Output</h2>
+          <canvas id="enc-out" class="preview" hidden></canvas>
+          <div class="output-fields" id="enc-output" hidden>
+            <label>image_hash <small>(SHA-256 of plaintext — required to decrypt)</small></label>
+            <div class="row"><code id="enc-hash" class="mono"></code><button class="ghost copy" data-copy="enc-hash">copy</button></div>
+
+            <label>hmac_tag <small>(SHA-256-HMAC over ciphertext — required to decrypt)</small></label>
+            <div class="row"><code id="enc-tag" class="mono"></code><button class="ghost copy" data-copy="enc-tag">copy</button></div>
+
+            <div class="row">
+              <button id="enc-dl-png" class="primary">Download encrypted .png</button>
+              <button id="enc-dl-bundle" class="ghost">Download bundle (.json)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- DECRYPT -->
+    <section id="decrypt" class="panel">
+      <div class="grid">
+        <div class="card">
+          <h2>1. Encrypted image</h2>
+          <label class="drop" id="dec-drop">
+            <input type="file" id="dec-file" accept="image/*,application/json" hidden />
+            <span>Drop encrypted .png (or bundle .json) here, or <u>click to browse</u></span>
+            <small>Loading a bundle will fill in hash &amp; tag automatically</small>
+          </label>
+          <canvas id="dec-preview" class="preview" hidden></canvas>
+          <div class="meta" id="dec-meta"></div>
+        </div>
+
+        <div class="card">
+          <h2>2. Key &amp; auth data</h2>
+          <label for="dec-key">Key (32 hex chars)</label>
+          <input id="dec-key" type="text" maxlength="32" spellcheck="false" />
+
+          <label for="dec-hash">image_hash (64 hex chars)</label>
+          <input id="dec-hash" type="text" maxlength="64" spellcheck="false" />
+
+          <label for="dec-tag">hmac_tag (64 hex chars)</label>
+          <input id="dec-tag" type="text" maxlength="64" spellcheck="false" />
+
+          <button id="dec-run" class="primary" disabled>Decrypt</button>
+          <div class="status" id="dec-status"></div>
+        </div>
+
+        <div class="card">
+          <h2>3. Plaintext</h2>
+          <canvas id="dec-out" class="preview" hidden></canvas>
+          <button id="dec-dl-png" class="primary" hidden>Download decrypted .png</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ABOUT -->
+    <section id="about" class="panel">
+      <div class="card wide">
+        <h2>What this demo is doing</h2>
+        <p>
+          For each color channel, two rounds of:
+          <strong>2D permutation → key-dependent S-box → 2D parallel-prefix XOR diffusion</strong>,
+          followed by cross-channel RGB entanglement and an HMAC-SHA256 tag.
+        </p>
+        <pre class="ascii">
+plaintext RGB
+      │
+      ▼  for each channel, ×2 rounds:
+  ┌─ Fisher–Yates row/col/intra-row permutation
+  ├─ key-dependent S-box (8-bit non-linear substitution)
+  └─ row + column + full-image prefix-XOR diffusion
+      │
+      ▼
+  cross-channel RGB entanglement (XOR at key-derived rotated offsets)
+      │
+      ▼
+  HMAC-SHA256(ciphertext) — integrity tag
+        </pre>
+
+        <h3>Performance note</h3>
+        <p>
+          This page is a pure JavaScript port; the original implementation has
+          a C core that runs ~63× faster. Browser encryption of a 256×256 RGB
+          image takes a couple of seconds. Stick to ≤ 512×512 unless you have
+          patience.
+        </p>
+
+        <h3>Limitations</h3>
+        <ul>
+          <li>No formal security proof; no public cryptanalysis.</li>
+          <li>Linear (over GF(2)) diffusion layer.</li>
+          <li>128-bit key space.</li>
+          <li>Plaintext-dependent keying → image hash must travel with the ciphertext.</li>
+          <li>Image-only; not a general-purpose block/stream cipher.</li>
+        </ul>
+
+        <p>
+          Source: <a href="https://github.com/" id="repo-link">project repo</a>.
+          See <code>docs/SPECIFICATION.md</code> and <code>docs/VIABILITY.md</code>
+          for the full write-up.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>TPF Cipher — educational portfolio project, MIT license.</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
