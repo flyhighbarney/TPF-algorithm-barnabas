@@ -22,24 +22,30 @@ for (const btn of document.querySelectorAll(".tab")) {
 
 // ── Image <-> canvas helpers ─────────────────────────────────────────────────
 
-function loadImageFile(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
-    img.src = url;
+// Decode the file into an ImageBitmap with *no* color-space conversion.
+// Plain <img> + drawImage will silently apply the browser's color management
+// (sRGB ↔ display-P3 etc.), which mangles bytes for a byte-exact cipher —
+// causing spurious HMAC failures on what should be a clean PNG round-trip.
+async function loadImageFile(file) {
+  return await createImageBitmap(file, {
+    colorSpaceConversion: "none",
+    premultiplyAlpha: "none",
   });
 }
 
-function imageToCanvasRGB(img, canvas) {
-  canvas.width = img.naturalWidth;
-  canvas.height = img.naturalHeight;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+function imageToCanvasRGB(bitmap, canvas) {
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d", {
+    willReadFrequently: true,
+    colorSpace: "srgb",
+  });
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(img, 0, 0);
-  const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  // Strip alpha -> RGB row-major
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0);
+  const id = ctx.getImageData(0, 0, canvas.width, canvas.height, {
+    colorSpace: "srgb",
+  });
   const n = canvas.width * canvas.height;
   const rgb = new Uint8Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -52,8 +58,11 @@ function imageToCanvasRGB(img, canvas) {
 
 function rgbToCanvas(rgb, w, h, canvas) {
   canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  const id = ctx.createImageData(w, h);
+  const ctx = canvas.getContext("2d", {
+    willReadFrequently: true,
+    colorSpace: "srgb",
+  });
+  const id = ctx.createImageData(w, h, { colorSpace: "srgb" });
   const n = w * h;
   for (let i = 0; i < n; i++) {
     id.data[i*4]   = rgb[i*3];
@@ -138,7 +147,10 @@ encKey.addEventListener("input", refreshEncBtn);
 
 function refreshEncBtn() {
   const keyOk = /^[0-9a-fA-F]{32}$/.test(encKey.value.trim());
-  encRun.disabled = !(state.enc.rgb && keyOk);
+  const ready = state.enc.rgb && keyOk;
+  encRun.disabled = !ready;
+  const selftest = $("enc-selftest");
+  if (selftest) selftest.disabled = !ready;
 }
 
 encRun.addEventListener("click", async () => {
@@ -164,6 +176,37 @@ encRun.addEventListener("click", async () => {
     setStatus(encStatus, `done in ${dt}s — save the hash + tag, you need them to decrypt`, "ok");
   } catch (e) {
     setStatus(encStatus, "error: " + e.message, "err");
+  } finally {
+    refreshEncBtn();
+  }
+});
+
+$("enc-selftest").addEventListener("click", async () => {
+  const btn = $("enc-selftest");
+  btn.disabled = true; encRun.disabled = true;
+  try {
+    setStatus(encStatus, "self-test: encrypting in memory …", "busy");
+    const key = hexToBytes(encKey.value);
+    const { enc, imghash, tag } = await encryptAuthenticated(
+      state.enc.rgb, state.enc.h, state.enc.w, key,
+      (m) => setStatus(encStatus, "self-test: " + m + " …", "busy"));
+    setStatus(encStatus, "self-test: decrypting in memory …", "busy");
+    const dec = await decryptAuthenticated(
+      enc, state.enc.h, state.enc.w, key, imghash, tag,
+      (m) => setStatus(encStatus, "self-test: " + m + " …", "busy"));
+    let mismatch = -1;
+    for (let i = 0; i < dec.length; i++) {
+      if (dec[i] !== state.enc.rgb[i]) { mismatch = i; break; }
+    }
+    if (mismatch === -1) {
+      setStatus(encStatus,
+        `self-test ✓  encrypt+decrypt round-trip is byte-exact (${dec.length} bytes)`, "ok");
+    } else {
+      setStatus(encStatus,
+        `self-test ✗  mismatch at byte ${mismatch} — cipher bug, please file an issue`, "err");
+    }
+  } catch (e) {
+    setStatus(encStatus, "self-test error: " + e.message, "err");
   } finally {
     refreshEncBtn();
   }
